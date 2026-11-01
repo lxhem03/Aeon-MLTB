@@ -1,5 +1,5 @@
 
-name: Inspect Docker Base Images
+name: Complete Docker Base Image Inspection
 
 on:
   workflow_dispatch:
@@ -9,38 +9,308 @@ permissions:
 
 jobs:
   inspect:
+    name: Inspect Mirror-Leech Images
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Check Docker
-        run: docker version
-
-      - name: Inspect Z-Mirror
+      - name: Inspect both Docker images
+        shell: bash
         run: |
-          docker pull dawn001/z_mirror:main
-          docker image inspect dawn001/z_mirror:main
-          docker run --rm --entrypoint /bin/sh dawn001/z_mirror:main -c '
-            cat /etc/os-release
-            python3 --version
-            ffmpeg -version 2>&1 | head -n 2
-            for cmd in aria2c qbittorrent-nox qbittorrent ffmpeg ffprobe rclone yt-dlp; do
-              echo "Checking $cmd"
-              command -v "$cmd" || true
-            done
-            python3 -m pip list 2>&1
+          mkdir -p reports
+          REPORT="reports/base-image-inspection.txt"
+
+          exec > >(tee "$REPORT") 2>&1
+
+          echo "=================================================="
+          echo " MIRROR-LEECH BASE IMAGE INSPECTION"
+          echo " Date: $(date -u)"
+          echo "=================================================="
+
+          docker version
+
+          inspect_image() {
+            IMAGE="$1"
+
+            echo ""
+            echo ""
+            echo "##################################################"
+            echo " IMAGE: $IMAGE"
+            echo "##################################################"
+
+            if ! docker pull "$IMAGE"; then
+              echo "ERROR: IMAGE PULL FAILED: $IMAGE"
+              return 0
+            fi
+
+            echo ""
+            echo "========== DOCKER IMAGE METADATA =========="
+
+            docker image inspect "$IMAGE" --format '
+          Image ID: {{.Id}}
+          Repo Digests: {{json .RepoDigests}}
+          Created: {{.Created}}
+          OS: {{.Os}}
+          Architecture: {{.Architecture}}
+          User: {{.Config.User}}
+          Working Directory: {{.Config.WorkingDir}}
+          Entrypoint: {{json .Config.Entrypoint}}
+          CMD: {{json .Config.Cmd}}
+          Exposed Ports: {{json .Config.ExposedPorts}}
+          Volumes: {{json .Config.Volumes}}
+          Labels: {{json .Config.Labels}}
+          RootFS Layers: {{len .RootFS.Layers}}
           '
 
-      - name: Inspect Aeon-MLTB
-        run: |
-          docker pull 5hojib/aeon:latest
-          docker image inspect 5hojib/aeon:latest
-          docker run --rm --entrypoint /bin/sh 5hojib/aeon:latest -c '
-            cat /etc/os-release
-            python3 --version
-            ffmpeg -version 2>&1 | head -n 2
-            for cmd in aria2c qbittorrent-nox qbittorrent ffmpeg ffprobe rclone yt-dlp; do
-              echo "Checking $cmd"
-              command -v "$cmd" || true
-            done
-            python3 -m pip list 2>&1
-          '
+            echo ""
+            echo "========== IMAGE SIZE =========="
+
+            docker image ls "$IMAGE"
+
+            echo ""
+            echo "========== DOCKER LAYER HISTORY =========="
+
+            docker history --format 'Size: {{.Size}}' "$IMAGE"
+
+            echo ""
+            echo "========== CONTAINER INSPECTION =========="
+
+            docker run --rm --entrypoint /bin/sh "$IMAGE" -s <<'CONTAINER_SCRIPT'
+          set +e
+
+          section() {
+            echo ""
+            echo "------------------------------------------"
+            echo "$1"
+            echo "------------------------------------------"
+          }
+
+          section "OPERATING SYSTEM"
+
+          cat /etc/os-release 2>&1
+          uname -a 2>&1
+
+          section "SYSTEM INFORMATION"
+
+          echo "Architecture:"
+          uname -m
+
+          echo "Disk usage:"
+          df -h / 2>&1
+
+          echo "PATH:"
+          echo "$PATH"
+
+          section "AVAILABLE EXECUTABLES"
+
+          for CMD in \
+            python python3 python3.10 python3.11 python3.12 python3.13 \
+            pip pip3 uv \
+            ffmpeg ffprobe \
+            aria2c geria \
+            qbittorrent qbittorrent-nox torbit \
+            rclone \
+            yt-dlp youtube-dl \
+            gunicorn \
+            git curl wget \
+            7z 7zz unrar rar unzip zip \
+            mediainfo \
+            gcc g++ \
+            node npm
+          do
+            printf "%-22s" "$CMD"
+            command -v "$CMD" 2>/dev/null || echo "NOT FOUND"
+          done
+
+          section "SAFE VERSION CHECKS"
+
+          for CMD in python3 python ffmpeg ffprobe aria2c rclone yt-dlp git uv mediainfo
+          do
+            if command -v "$CMD" >/dev/null 2>&1; then
+              echo ""
+              echo "### $CMD"
+              case "$CMD" in
+                python|python3)
+                  "$CMD" --version 2>&1
+                  ;;
+                ffmpeg|ffprobe|aria2c|rclone|yt-dlp|git|uv|mediainfo)
+                  "$CMD" --version 2>&1 | head -n 5
+                  ;;
+              esac
+            fi
+          done
+
+          section "PYTHON INTERPRETERS AND VIRTUAL ENVIRONMENTS"
+
+          find /usr/bin /usr/local/bin /opt /app /root /workspace /usr/src \
+            -type f \
+            \( -name python -o -name python3 -o -name 'python3.*' \) \
+            -perm /111 2>/dev/null | sort -u | head -n 30 \
+            > /tmp/python-candidates
+
+          for P in python python3 python3.10 python3.11 python3.12 python3.13
+          do
+            command -v "$P" 2>/dev/null >> /tmp/python-candidates
+          done
+
+          sort -u /tmp/python-candidates -o /tmp/python-candidates
+
+          while IFS= read -r P
+          do
+            [ -x "$P" ] || continue
+
+            echo ""
+            echo "### PYTHON: $P"
+
+            "$P" --version 2>&1
+
+            "$P" -c '
+          import sys
+          print("Executable:", sys.executable)
+          print("Prefix:", sys.prefix)
+          print("Base prefix:", sys.base_prefix)
+          print("Virtual environment:", sys.prefix != sys.base_prefix)
+          ' 2>&1
+
+            echo "--- Pip ---"
+            "$P" -m pip --version 2>&1 || true
+
+            echo "--- Installed Python packages ---"
+
+            "$P" -m pip list --format=columns 2>&1
+
+            echo "--- Package metadata fallback ---"
+
+            "$P" -c '
+          try:
+              from importlib.metadata import distributions
+              packages = sorted(
+                  (d.metadata.get("Name", "Unknown"), d.version)
+                  for d in distributions()
+              )
+              for name, version in packages:
+                  print(f"{name}=={version}")
+              print("Total packages:", len(packages))
+          except Exception as e:
+              print("Package inspection failed:", e)
+          ' 2>&1
+
+          done < /tmp/python-candidates
+
+          section "UV ENVIRONMENT"
+
+          if command -v uv >/dev/null 2>&1; then
+            uv --version 2>&1
+            uv python list 2>&1
+          else
+            echo "UV NOT FOUND"
+          fi
+
+          section "IMPORTANT APPLICATION DIRECTORIES"
+
+          for DIR in \
+            /app \
+            /opt \
+            /usr/src/app \
+            /root \
+            /workspace \
+            /usr/local/bin \
+            /usr/bin
+          do
+            if [ -d "$DIR" ]; then
+              echo ""
+              echo "### $DIR"
+              ls -lah "$DIR" 2>&1 | head -n 60
+            fi
+          done
+
+          section "VIRTUAL ENVIRONMENT DIRECTORIES"
+
+          find /app /opt /usr/src /root /workspace \
+            -maxdepth 5 -type f \
+            \( -name pyvenv.cfg -o -name activate \) \
+            2>/dev/null | head -n 100
+
+          section "INSTALLED DEBIAN PACKAGES"
+
+          if command -v dpkg-query >/dev/null 2>&1; then
+            dpkg-query -W \
+              -f='${Package} ${Version} ${Architecture}\n' \
+              2>&1 | sort
+          else
+            echo "DPKG NOT FOUND"
+          fi
+
+          section "IMPORTANT SYSTEM PACKAGES"
+
+          if command -v dpkg-query >/dev/null 2>&1; then
+            dpkg-query -W \
+              -f='${Package} ${Version}\n' \
+              2>/dev/null | grep -Ei \
+              'ffmpeg|aria2|qbittorrent|libtorrent|rclone|python|pip|git|curl|wget|mediainfo|unrar|p7zip|libav|libopus|libx264|libx265|gcc|uv' \
+              || true
+          fi
+
+          section "SHARED LIBRARIES"
+
+          if command -v ldconfig >/dev/null 2>&1; then
+            ldconfig -p 2>&1 | grep -Ei \
+              'torrent|aria|avcodec|avformat|avfilter|avutil|swscale|swresample|opus|x264|x265|ssl|crypto' \
+              || true
+          else
+            echo "LDCONFIG NOT FOUND"
+          fi
+
+          section "IMPORTANT LIBRARY FILES"
+
+          find /usr/lib /usr/local/lib /lib /opt \
+            -type f \
+            \( -iname '*torrent*' \
+            -o -iname '*aria*' \
+            -o -iname '*avcodec*' \
+            -o -iname '*avformat*' \
+            -o -iname '*opus*' \
+            -o -iname '*x264*' \
+            -o -iname '*x265*' \) \
+            2>/dev/null | head -n 200
+
+          section "FILESYSTEM EXECUTABLE SEARCH"
+
+          find /usr/local/bin /usr/bin /bin /opt /app /root \
+            -maxdepth 5 -type f -perm /111 \
+            2>/dev/null | grep -Ei \
+            'python|pip|ffmpeg|aria|torrent|rclone|yt-dlp|gunicorn|7z|unrar|uv' \
+            | head -n 200
+
+          section "INSPECTION COMPLETED"
+
+          echo "Container inspection finished."
+          exit 0
+          CONTAINER_SCRIPT
+
+            RESULT=$?
+
+            if [ "$RESULT" -ne 0 ]; then
+              echo "WARNING: Container inspection returned $RESULT"
+            fi
+
+            echo ""
+            echo "========== END OF IMAGE: $IMAGE =========="
+          }
+
+          inspect_image "dawn001/z_mirror:main"
+          inspect_image "5hojib/aeon:latest"
+
+          echo ""
+          echo "=================================================="
+          echo " ALL IMAGE INSPECTIONS FINISHED"
+          echo "=================================================="
+
+      - name: Upload complete inspection report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mirror-leech-base-image-reports
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 7
