@@ -1,81 +1,46 @@
-name: Inspect Mirror Leech Base Images
+
+name: Inspect Docker Base Images
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   inspect:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Inspect Z-Mirror and Aeon images
-        shell: bash
+      - name: Check Docker
+        run: docker version
+
+      - name: Inspect Z-Mirror
         run: |
-          set +e
+          docker pull dawn001/z_mirror:main
+          docker image inspect dawn001/z_mirror:main
+          docker run --rm --entrypoint /bin/sh dawn001/z_mirror:main -c '
+            cat /etc/os-release
+            python3 --version
+            ffmpeg -version 2>&1 | head -n 2
+            for cmd in aria2c qbittorrent-nox qbittorrent ffmpeg ffprobe rclone yt-dlp; do
+              echo "Checking $cmd"
+              command -v "$cmd" || true
+            done
+            python3 -m pip list 2>&1
+          '
 
-          for IMAGE in dawn001/z_mirror:main 5hojib/aeon:latest
-          do
-            echo ""
-            echo "======================================"
-            echo "INSPECTING: $IMAGE"
-            echo "======================================"
-
-            docker pull "$IMAGE"
-
-            if [ $? -ne 0 ]; then
-              echo "FAILED TO PULL: $IMAGE"
-              continue
-            fi
-
-            echo ""
-            echo "----- IMAGE DIGEST AND METADATA -----"
-            docker image inspect "$IMAGE" \
-              --format 'ID: {{.Id}}
-Digests: {{json .RepoDigests}}
-Created: {{.Created}}
-Architecture: {{.Architecture}}
-OS: {{.Os}}
-Entrypoint: {{json .Config.Entrypoint}}
-CMD: {{json .Config.Cmd}}
-Labels: {{json .Config.Labels}}'
-
-            echo ""
-            echo "----- OS AND INSTALLED TOOLS -----"
-
-            docker run --rm --entrypoint /bin/sh "$IMAGE" -c '
-              echo "--- OS ---"
-              cat /etc/os-release
-
-              echo "--- Python ---"
-              python3 --version 2>&1
-
-              echo "--- Pip ---"
-              python3 -m pip --version 2>&1
-
-              echo "--- FFmpeg ---"
-              ffmpeg -version 2>&1 | head -n 3
-
-              echo "--- Available binaries ---"
-              for CMD in aria2c qbittorrent-nox qbittorrent \
-                         ffmpeg ffprobe rclone yt-dlp \
-                         7z unrar python3 git
-              do
-                printf "%-18s" "$CMD"
-                command -v "$CMD" || echo "NOT FOUND"
-              done
-
-              echo "--- Python packages ---"
-              python3 -m pip list 2>&1
-
-              echo "--- Debian packages ---"
-              if command -v dpkg-query >/dev/null 2>&1; then
-                dpkg-query -W -f="${Package} ${Version}\n" 2>&1
-              fi
-            '
-
-            echo ""
-            echo "----- DOCKER HISTORY -----"
-            docker history --no-trunc "$IMAGE" | head -n 30
-
-          done
-          
+      - name: Inspect Aeon-MLTB
+        run: |
+          docker pull 5hojib/aeon:latest
+          docker image inspect 5hojib/aeon:latest
+          docker run --rm --entrypoint /bin/sh 5hojib/aeon:latest -c '
+            cat /etc/os-release
+            python3 --version
+            ffmpeg -version 2>&1 | head -n 2
+            for cmd in aria2c qbittorrent-nox qbittorrent ffmpeg ffprobe rclone yt-dlp; do
+              echo "Checking $cmd"
+              command -v "$cmd" || true
+            done
+            python3 -m pip list 2>&1
+          '
