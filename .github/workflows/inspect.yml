@@ -52,17 +52,10 @@ jobs:
             Created: {{.Created}}
             OS: {{.Os}}
             Architecture: {{.Architecture}}
-            User: {{.Config.User}}
-            Working Directory: {{.Config.WorkingDir}}
-            Entrypoint: {{json .Config.Entrypoint}}
-            Command: {{json .Config.Cmd}}
-            Exposed Ports: {{json .Config.ExposedPorts}}
-            Volumes: {{json .Config.Volumes}}
-            Labels: {{json .Config.Labels}}
-            Environment: Not displayed (to protect secrets)
-            Layer Count: {{len .RootFS.Layers}}
+            Config: {{json .Config}}
+            RootFS: {{json .RootFS}}
             ' || {
-            echo "WARNING: Could not read all Docker metadata."
+            echo "WARNING: Docker metadata inspection failed."
             docker image inspect "$IMAGE" || true
             }
 
@@ -79,7 +72,7 @@ jobs:
             echo ""
             echo "========== CONTAINER INSPECTION =========="
 
-            docker run --rm --entrypoint /bin/sh "$IMAGE" -s <<'CONTAINER_SCRIPT'
+            docker run --rm -i --entrypoint /bin/sh "$IMAGE" -s <<'CONTAINER_SCRIPT'
           set +e
 
           section() {
