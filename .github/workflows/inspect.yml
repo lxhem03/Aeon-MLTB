@@ -45,22 +45,26 @@ jobs:
 
             echo ""
             echo "========== DOCKER IMAGE METADATA =========="
-
+            
             docker image inspect "$IMAGE" --format '
-          Image ID: {{.Id}}
-          Repo Digests: {{json .RepoDigests}}
-          Created: {{.Created}}
-          OS: {{.Os}}
-          Architecture: {{.Architecture}}
-          User: {{.Config.User}}
-          Working Directory: {{.Config.WorkingDir}}
-          Entrypoint: {{json .Config.Entrypoint}}
-          CMD: {{json .Config.Cmd}}
-          Exposed Ports: {{json .Config.ExposedPorts}}
-          Volumes: {{json .Config.Volumes}}
-          Labels: {{json .Config.Labels}}
-          RootFS Layers: {{len .RootFS.Layers}}
-          '
+            ID: {{.Id}}
+            Repo Digests: {{json .RepoDigests}}
+            Created: {{.Created}}
+            OS: {{.Os}}
+            Architecture: {{.Architecture}}
+            User: {{.Config.User}}
+            Working Directory: {{.Config.WorkingDir}}
+            Entrypoint: {{json .Config.Entrypoint}}
+            Command: {{json .Config.Cmd}}
+            Exposed Ports: {{json .Config.ExposedPorts}}
+            Volumes: {{json .Config.Volumes}}
+            Labels: {{json .Config.Labels}}
+            Environment: Not displayed (to protect secrets)
+            Layer Count: {{len .RootFS.Layers}}
+            ' || {
+            echo "WARNING: Could not read all Docker metadata."
+            docker image inspect "$IMAGE" || true
+            }
 
             echo ""
             echo "========== IMAGE SIZE =========="
